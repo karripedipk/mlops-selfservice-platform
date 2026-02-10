@@ -1,0 +1,29 @@
+name: Deploy (Terraform + ECS)
+on:
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    env:
+      AWS_REGION: ${{ secrets.AWS_REGION }}
+      PROJECT_NAME: ${{ secrets.PROJECT_NAME }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.6.6"
+
+      - name: Configure AWS credentials (access keys)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ secrets.AWS_REGION }}
+
+      - name: Terraform init/apply
+        run: |
+          cd platform/infra/terraform
+          terraform init
+          terraform apply -auto-approve -var="project_name=${PROJECT_NAME}" -var="aws_region=${AWS_REGION}"
