@@ -1,96 +1,185 @@
-# Self-Service MLOps Platform (Local + AWS ECS + Terraform)
+# 🚀 Self-Service MLOps Platform
+Local Development → AWS ECS (Terraform) Deployment
 
-# Self-Service MLOps Platform (Local → AWS ECS via Terraform)
+I built this end-to-end MLOps platform to demonstrate how internal ML teams can reliably move from experimentation to production using standardized workflows, immutable artifacts, and infrastructure-as-code.
 
-I’m building a practical, end-to-end **MLOps platform** that enables internal data science teams to reliably take models from development to production with strong defaults, automated promotion, and operational visibility.
+This project is intentionally platform-first — not just model training.
 
-This repo is intentionally **platform-first**:
-- Opinionated **golden paths** for common workflows (80/20)
-- Self-service tooling to remove manual steps and reduce friction
-- Secure, scalable deployment patterns on AWS
-- Monitoring + drift detection to keep models reliable after release
+------------------------------------------------------------
 
----
+🎯 PLATFORM GOALS
 
-## What I’m Building
+- Enable self-service ML development
+- Standardize training & deployment workflows
+- Ensure runtime consistency between training and serving
+- Promote models safely using immutable artifacts
+- Provide production observability and drift detection
+- Use Infrastructure-as-Code for reproducibility
 
-### 1) Golden Path Developer Experience (DX)
-I’m creating a small CLI (`mlopsctl`) and a standard project template so a data scientist can:
+------------------------------------------------------------
 
-- scaffold a new ML project
-- run training in a consistent, containerized way
-- package and publish model artifacts immutably
-- promote a model to “prod” with a controlled pointer update
-- deploy a serving endpoint on ECS with repeatable infrastructure
+🧱 HIGH-LEVEL ARCHITECTURE
 
-This is meant to feel like an internal platform: simple for users, strict where it matters.
+Local Data (CSV / S3)
+        ↓
+Training Container (Dockerized ML)
+        ↓
+Model Artifacts
+ - model.pkl
+ - baseline.json
+ - metrics.json
+        ↓
+S3 Versioned Artifact Storage
+        ↓
+SSM Parameter Store (Production Model Pointer)
+        ↓
+ECS Fargate FastAPI Inference Service
+        ↓
+Application Load Balancer
+ - /health
+ - /predict
+ - /metrics
 
-### 2) Model Lifecycle (End-to-End)
-**Train → Validate → Register/Promote → Deploy → Observe**
+Side Systems:
+- CloudWatch Logs (observability)
+- Drift Monitoring Job (KS test + HTML report)
 
-- **Training pipeline** runs in Docker and produces:
-  - `model.pkl`
-  - `metrics.json`
-  - `baseline.json` (for drift monitoring)
-- **Artifacts** are stored immutably in **S3** under versioned paths
-- A **production model pointer** is stored in **SSM Parameter Store** (a lightweight “registry pointer”)
-- **Serving** runs on **ECS Fargate** behind an **Application Load Balancer**
-- **Monitoring** includes:
-  - `/health` endpoint for readiness
-  - `/metrics` endpoint for basic service health
-  - drift job that compares current feature distributions to baseline and writes an HTML report
+------------------------------------------------------------
 
-### 3) Infrastructure as Code (IaC)
-All AWS resources are created with **Terraform**:
-- S3 bucket for artifacts
-- ECR repository for serving image
-- ECS cluster + task definition + service (Fargate)
-- ALB + target group + listener
-- IAM roles/policies for least-privilege access
+🏗 ARCHITECTURE COMPONENTS
+
+Training Layer
+- Dockerized training pipeline
+- Scikit-learn model (RandomForest)
+- Generates model.pkl, baseline.json, metrics.json
+- Optional MLflow tracking
+
+Artifact Management
+- Immutable artifacts stored in S3
+- Timestamped versioned paths
+- Production model selected via SSM Parameter pointer
+- Promotion = updating pointer, not overwriting artifact
+
+Serving Layer
+- FastAPI inference service
+- Containerized deployment
+- Runs on ECS Fargate
+- Endpoints: /health, /predict, /metrics
+
+Infrastructure as Code (Terraform)
+- S3 bucket
+- ECS cluster + service
+- ECR repository
+- IAM roles
+- Application Load Balancer
 - CloudWatch logs
+- SSM model pointer
 
----
+Monitoring & Drift
+- Baseline feature statistics saved at training
+- KS-test drift detection
+- HTML drift report
+- Production logs in CloudWatch
 
-## Architecture (Simplified)
+------------------------------------------------------------
 
-**Local**
-- Train (Docker) → artifacts in `projects/usedcar-price/artifacts/`
-- Optional: MLflow local tracking (Docker Compose)
-- Serve locally (FastAPI container)
+📦 GOLDEN PATH (SELF-SERVICE WORKFLOW)
 
-**AWS**
-- Model artifacts: **S3**
-- Prod model pointer: **SSM Parameter Store**
-- Serving: **ECS Fargate** + **ALB**
-- Logs: **CloudWatch Logs**
+mlopsctl init project-name
+mlopsctl train
+mlopsctl publish
+mlopsctl deploy --env prod
 
-Key design choice:
-> Artifacts are immutable; “promotion” is a pointer update.  
-> This matches how real platforms separate reproducible artifacts from deploy-time selection.
+This enforces consistency and reduces operational risk.
 
----
+------------------------------------------------------------
 
-## Repo Layout
+⚙️ LOCAL SETUP
 
-```text
-platform/
-  cli/                      # mlopsctl (golden path)
-  registry/                 # local MLflow (optional)
-  infra/terraform/          # AWS IaC for ECS + ALB + S3 + IAM
-  templates/ml-project/     # project template for DS teams
+1) Create virtual environment
+python -m venv .venv
+source .venv/bin/activate
+pip install -e ./platform/cli
 
-projects/
-  usedcar-price/
-    training/               # training container + code
-    serving/                # FastAPI serving container + code
-    monitoring/             # drift job (HTML report)
-    data/                   # small sample data for local runs
+2) Optional: Start MLflow
+docker compose -f platform/registry/docker-compose.mlflow.yml up -d
+export MLFLOW_TRACKING_URI=http://localhost:5001
 
-.github/workflows/
-  ci.yml                    # lint + tests
-  deploy.yml                # manual terraform deploy
+3) Train locally
+cd projects/usedcar-price
+make train-local
 
----
+Artifacts generated in:
+projects/usedcar-price/artifacts/
 
-## License
-MIT (for your portfolio use).
+4) Run inference locally
+make serve-local
+
+Test:
+curl http://localhost:8080/health
+
+curl -X POST http://localhost:8080/predict \
+  -H "Content-Type: application/json" \
+  -d '{"year":2019,"odometer":25000,"make_encoded":9,"model_encoded":42}'
+
+------------------------------------------------------------
+
+☁️ AWS DEPLOYMENT
+
+1) Provision infrastructure
+cd platform/infra/terraform
+terraform init
+terraform apply -auto-approve \
+  -var="project_name=mlops-demo" \
+  -var="aws_region=us-east-1"
+
+2) Build & push serving image
+bash scripts/aws_login_ecr.sh us-east-1
+bash scripts/build_push_serving.sh us-east-1 mlops-demo
+
+3) Publish model + update prod pointer
+export AWS_REGION=us-east-1
+export PROJECT_NAME=mlops-demo
+export ARTIFACT_BUCKET=$(terraform output -raw artifact_bucket)
+export MODEL_POINTER_PARAM=$(terraform output -raw model_pointer_ssm_param)
+
+bash scripts/train_publish.sh
+
+4) Test live endpoint
+ALB=$(terraform output -raw alb_dns_name)
+curl http://$ALB/health
+
+------------------------------------------------------------
+
+🧠 DESIGN PRINCIPLES
+
+- Immutable artifacts, mutable promotion pointer
+- Separation of training and serving environments
+- Reproducible container builds
+- Declarative infrastructure
+- Observability-first mindset
+- Platform abstraction over manual workflows
+
+------------------------------------------------------------
+
+🔎 WHAT THIS DEMONSTRATES
+
+- Scalable ML platform engineering
+- Self-service tooling design
+- Automated promotion workflows
+- Runtime dependency alignment
+- Infrastructure-as-Code best practices
+- Production-ready ML deployment on AWS
+- Drift monitoring integration
+
+------------------------------------------------------------
+
+🚀 PLATFORM MATURITY ROADMAP
+
+- Automated evaluation gates in CI
+- Canary / blue-green deployment
+- Rollback via pointer reset
+- Model approval workflow
+- Scheduled drift job via EventBridge
+- FinOps cost monitoring
+- Feature store integration
